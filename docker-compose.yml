@@ -1,0 +1,83 @@
+version: '3.8'
+
+# Define reusable common environment and service configs
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.10.2
+  restart: always
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+    AIRFLOW__WEBSERVER__SECRET_KEY: "supersecret"
+
+    # Secrets Manager config
+    AIRFLOW__SECRETS__BACKEND: airflow.providers.amazon.aws.secrets.secrets_manager.SecretsManagerBackend
+    AIRFLOW__SECRETS__BACKEND_KWARGS: '{"region_name": "us-east-1", "connections_prefix": "" }'
+   
+
+
+
+
+    # AWS credentials
+    AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+    AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+    AWS_DEFAULT_REGION: "us-east-1"
+
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    - postgres
+    - redis
+
+services:
+
+  # Postgres for Airflow metadata
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  # Redis for Celery broker
+  redis:
+    image: redis:7
+
+  # Airflow webserver
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      - airflow-scheduler
+      - airflow-worker
+
+  # Airflow scheduler
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+
+  # Airflow worker (Celery)
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+
+  # Airflow initialization container
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+
+volumes:
+  postgres-data:
